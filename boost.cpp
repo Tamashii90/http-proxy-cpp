@@ -6,6 +6,8 @@
 #include <regex>
 #include <string>
 
+using namespace boost;
+
 constexpr unsigned PORT = 8000;
 
 constexpr const char *RED = "\x1B[31m";
@@ -17,7 +19,7 @@ constexpr const char *CYN = "\x1B[36m";
 constexpr const char *WHT = "\x1B[37m";
 constexpr const char *RESET = "\x1B[0m";
 
-using namespace boost;
+enum class Body { CONTENT_LENGTH, CHUNKED, NONE };
 
 std::string parse_field(const std::string &http_header,
                         std::string &&field_name);
@@ -27,15 +29,34 @@ void to_lowercase(std::string &str) {
                  [](auto c) { return std::tolower(c); });
 }
 
+// case-insensitive version of str.find()
+bool find_ci(const std::string &haystack, const std::string &needle) {
+  auto it = std::search(haystack.begin(), haystack.end(), needle.begin(),
+                        needle.end(), [](unsigned char ch1, unsigned char ch2) {
+                          return std::tolower(ch1) == std::tolower(ch2);
+                        });
+  return it != haystack.end();
+}
+
+Body identify_body(const std::string &http_header) {
+  if (find_ci(http_header, "content-length")) {
+    return Body::CONTENT_LENGTH;
+  }
+  if (find_ci(http_header, "chunked")) {
+    return Body::CHUNKED;
+  }
+  return Body::NONE;
+}
+
 // TODO handle errors in writes and reads (e.g. most writes don't have
 // error_code in their arguments)
-void request(asio::ip::tcp::socket &client_socket, const std::string &host,
-             asio::io_context &io_context, const std::string &request) {
+void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
+                  asio::io_context &io_context, const std::string &request) {
   asio::ip::tcp::resolver resolver{io_context};
   system::error_code err;
   const auto endpoints = resolver.resolve(host, "http", err);
   if (err) {
-    std::cout << RED << err.message() << "\n"
+    std::cout << RED << err.message() << ". "
               << "Host: [" << host << "]" << RESET << std::endl;
     return;
   }
@@ -51,12 +72,11 @@ void request(asio::ip::tcp::socket &client_socket, const std::string &host,
   if (err && err.value() != asio::error::eof) {
     throw boost::system::system_error{err};
   }
-
   // After reading, header_len <= response_header.size() because of potential
   // extra characters
-  asio::write(client_socket, asio::buffer(response_header_plus, header_len));
-  std::cout << GREEN << response_header_plus.substr(0, header_len) << RESET
-            << std::endl;
+  const std::string response_header{response_header_plus.substr(0, header_len)};
+  asio::write(client_socket, asio::buffer(response_header));
+  std::cout << GREEN << response_header << RESET << std::endl;
 
   /*****************************************************************
   // TODO Does this block successfully replace parse_field()?
@@ -75,8 +95,12 @@ void request(asio::ip::tcp::socket &client_socket, const std::string &host,
   *****************************************************************/
 
   // TODO handle chunked messages
-  auto content_length = stoul(parse_field(
-      response_header_plus.substr(0, header_len), "content-length"));
+  if (identify_body(response_header) != Body::CONTENT_LENGTH) {
+    std::cout << RED << "Whoops! Only content-length is supported for now."
+              << RESET << std::endl;
+    return;
+  }
+  auto content_length = stoul(parse_field(response_header, "content-length"));
   std::string response_body{response_header_plus.substr(
       header_len, response_header_plus.size() - header_len)};
   auto transferred = asio::read(
@@ -107,7 +131,7 @@ void handle(asio::ip::tcp::socket &socket, asio::io_context &io_context) {
     return;
   }
   const std::string host = parse_field(request_header, "host");
-  request(socket, host, io_context, request_header);
+  send_request(socket, host, io_context, request_header);
 }
 
 std::string parse_field(const std::string &http_header_, std::string &&field) {
