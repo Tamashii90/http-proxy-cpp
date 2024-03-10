@@ -22,6 +22,11 @@ using namespace boost;
 std::string parse_field(const std::string &http_header,
                         std::string &&field_name);
 
+void to_lowercase(std::string &str) {
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](auto c) { return std::tolower(c); });
+}
+
 // TODO handle errors in writes and reads (e.g. most writes don't have
 // error_code in their arguments)
 void request(asio::ip::tcp::socket &client_socket, const std::string &host,
@@ -85,22 +90,30 @@ void request(asio::ip::tcp::socket &client_socket, const std::string &host,
 void handle(asio::ip::tcp::socket &socket, asio::io_context &io_context) {
   // TODO handle requests that have a body (e.g. POST)
   std::string request_header;
-  system::error_code ec;
+  system::error_code err;
   asio::read_until(socket, asio::dynamic_buffer(request_header), "\r\n\r\n");
-  if (ec && ec.value() != asio::error::eof) {
-    throw boost::system::system_error{ec};
+  if (err && err.value() != asio::error::eof) {
+    throw boost::system::system_error{err};
   }
   std::cout << YELLOW << request_header << RESET << std::endl;
+  std::string first_line =
+      request_header.substr(0, request_header.find("\r\n"));
+  std::istringstream iss{first_line};
+  std::string method, url, http_version;
+  iss >> method >> url >> http_version;
+  // http_version looks like "HTTP/1.1"
+  if (stod(http_version.substr(http_version.find("/") + 1)) > 1.1) {
+    std::cerr << RED << "HTTP Version Not Supported" << RESET << std::endl;
+    return;
+  }
   const std::string host = parse_field(request_header, "host");
   request(socket, host, io_context, request_header);
 }
 
 std::string parse_field(const std::string &http_header_, std::string &&field) {
   std::string http_header{http_header_};
-  std::transform(http_header.begin(), http_header.end(), http_header.begin(),
-                 [](auto c) { return std::tolower(c); });
-  std::transform(field.begin(), field.end(), field.begin(),
-                 [](auto c) { return std::tolower(c); });
+  to_lowercase(http_header);
+  to_lowercase(field);
   // There's a colon at the end of field names
   auto len_field_beg = http_header.find(field) + field.size() + strlen(":");
   auto len_field_end = http_header.find("\r\n", len_field_beg);
