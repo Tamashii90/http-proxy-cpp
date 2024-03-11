@@ -78,22 +78,6 @@ void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
   asio::write(client_socket, asio::buffer(response_header));
   std::cout << GREEN << response_header << RESET << std::endl;
 
-  /*****************************************************************
-  // TODO Does this block successfully replace parse_field()?
-  // Do NOT transform everything! There could be parts related to the
-  // response_BODY
-  std::transform(response_header.begin(), response_header.begin() + header_len,
-                 response_header.begin(),
-                 [](auto c) { return std::tolower(c); });
-
-  // Parse content-length field
-  auto len_field_beg =
-      response_header.find("content-length:") + strlen("content-length:");
-  auto len_field_end = response_header.find("\r\n", len_field_beg);
-  auto content_length = stoul(
-      response_header.substr(len_field_beg, len_field_end - len_field_beg));
-  *****************************************************************/
-
   // TODO handle chunked messages
   if (identify_body(response_header) != Body::CONTENT_LENGTH) {
     std::cout << RED << "Whoops! Only content-length is supported for now."
