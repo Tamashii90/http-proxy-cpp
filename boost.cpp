@@ -29,6 +29,25 @@ void to_lowercase(std::string &str) {
                  [](auto c) { return std::tolower(c); });
 }
 
+bool connect_to_endpoint(asio::io_context &io_context,
+                         asio::ip::tcp::socket &socket,
+                         const std::string &host) {
+  asio::ip::tcp::resolver resolver{io_context};
+  system::error_code err;
+  const auto endpoints = resolver.resolve(host, "http", err);
+  if (err) {
+    std::cout << RED << err.message() << ". "
+              << "Host: [" << host << "]" << RESET << std::endl;
+    return false;
+  }
+  asio::connect(socket, endpoints, err);
+  if (err) {
+    std::cout << RED << err.message() << RESET << std::endl;
+    return false;
+  }
+  return true;
+}
+
 // case-insensitive version of str.find()
 bool find_ci(const std::string &haystack, const std::string &needle) {
   auto it = std::search(haystack.begin(), haystack.end(), needle.begin(),
@@ -48,8 +67,8 @@ Body identify_body(const std::string &http_header) {
   return Body::NONE;
 }
 
-// TODO handle errors in writes and reads (e.g. most writes don't have
-// error_code in their arguments)
+// TODO Deprecated?
+/*******************************************************************************
 void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
                   asio::io_context &io_context, const std::string &request) {
   asio::ip::tcp::resolver resolver{io_context};
@@ -61,7 +80,7 @@ void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
     return;
   }
   asio::ip::tcp::socket socket{io_context};
-  const auto connected_endpoint = asio::connect(socket, endpoints);
+  asio::connect(socket, endpoints);
 
   asio::write(socket, asio::buffer(request));
 
@@ -94,9 +113,90 @@ void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
   }
   asio::write(client_socket, asio::buffer(response_body));
 }
+*******************************************************************************/
 
+bool recv_message(asio::ip::tcp::socket &client_socket, std::string &message,
+                  std::string *host_to_mutate = nullptr) {
+  system::error_code err;
+  auto header_len = asio::read_until(
+      client_socket, asio::dynamic_buffer(message), "\r\n\r\n", err);
+  if (err) {
+    if (err.value() == asio::error::eof && !header_len) {
+      return false;
+    }
+    throw boost::system::system_error{err};
+  }
+  if (host_to_mutate) {
+    // Everything inside this block is exclusive to requests received from the
+    // CLIENT
+    std::string first_line = message.substr(0, message.find("\r\n"));
+    std::istringstream iss{first_line};
+    std::string method, url, http_version;
+    iss >> method >> url >> http_version;
+    // http_version looks like "HTTP/1.1"
+    if (stod(http_version.substr(http_version.find("/") + 1)) > 1.1) {
+      std::cerr << RED << "HTTP Version Not Supported" << RESET << std::endl;
+      return false;
+    }
+    *host_to_mutate = parse_field(message, "host");
+  }
+  const std::string header{message.substr(0, header_len)};
+  std::cout << (host_to_mutate ? YELLOW : GREEN) << header << RESET
+            << std::endl;
+
+  // TODO handle chunked messages
+  Body body_type = identify_body(header);
+  if (body_type != Body::CONTENT_LENGTH) {
+    if (body_type == Body::NONE) {
+      return true;
+    }
+    std::cout << RED << "Whoops! Only content-length is supported for now."
+              << RESET << std::endl;
+    return false;
+  }
+  auto content_length = stoul(parse_field(header, "content-length"));
+  auto transferred = asio::read(
+      client_socket, asio::dynamic_buffer(message, content_length + header_len),
+      err);
+  if (err && err.value() != asio::error::eof) {
+    throw boost::system::system_error{err};
+  }
+  return true;
+}
+
+// TODO handle errors in writes and reads (e.g. most writes don't have
+// error_code in their arguments)
+void new_handle(asio::ip::tcp::socket &client_socket,
+                asio::io_context &io_context) {
+  asio::ip::tcp::socket server_socket{io_context};
+  std::string message;
+  while (client_socket.is_open()) {
+    std::string host;
+    if (!recv_message(client_socket, message, &host)) {
+      break;
+    }
+    // only connect if not already connected
+    if (!server_socket.is_open() &&
+        !connect_to_endpoint(io_context, server_socket, host)) {
+      break;
+    }
+    asio::write(server_socket, asio::buffer(message));
+    message.clear();
+    if (!recv_message(server_socket, message, nullptr)) {
+      break;
+    }
+    asio::write(client_socket, asio::buffer(message));
+    message.clear();
+    if (!server_socket.is_open()) {
+      break;
+    }
+  }
+  std::cout << RED << "Socket down." << RESET << std::endl;
+}
+
+// TODO Deprecated?
+/*************************************************************************
 void handle(asio::ip::tcp::socket &socket, asio::io_context &io_context) {
-  // TODO handle requests that have a body (e.g. POST)
   std::string request_header;
   system::error_code err;
   asio::read_until(socket, asio::dynamic_buffer(request_header), "\r\n\r\n");
@@ -117,6 +217,7 @@ void handle(asio::ip::tcp::socket &socket, asio::io_context &io_context) {
   const std::string host = parse_field(request_header, "host");
   send_request(socket, host, io_context, request_header);
 }
+*************************************************************************/
 
 std::string parse_field(const std::string &http_header_, std::string &&field) {
   std::string http_header{http_header_};
@@ -139,20 +240,20 @@ std::string parse_field(const std::string &http_header_, std::string &&field) {
 }
 
 int main() {
-  try {
-    asio::io_context io_context;
-    asio::ip::tcp::acceptor acceptor{
-        io_context, asio::ip::tcp::endpoint{asio::ip::tcp::v4(), PORT}};
-    printf("Listening on port %u\n", PORT);
-    while (true) {
+  asio::io_context io_context;
+  asio::ip::tcp::acceptor acceptor{
+      io_context, asio::ip::tcp::endpoint{asio::ip::tcp::v4(), PORT}};
+  printf("Listening on port %u\n", PORT);
+  while (true) {
+    try {
       asio::ip::tcp::socket socket{io_context};
       asio::ip::tcp::endpoint client_endpoint;
       acceptor.accept(socket, client_endpoint);
-      std::cout << "New client! on port " << client_endpoint.port()
-                << std::endl;
-      handle(socket, io_context);
+      std::cout << MAG << "New socket on port " << client_endpoint.port()
+                << RESET << std::endl;
+      new_handle(socket, io_context);
+    } catch (std::exception &e) {
+      std::cerr << e.what() << std::endl;
     }
-  } catch (std::exception &e) {
-    std::cerr << e.what() << std::endl;
   }
 }
