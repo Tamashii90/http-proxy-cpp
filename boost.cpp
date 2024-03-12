@@ -191,7 +191,8 @@ void new_handle(asio::ip::tcp::socket &client_socket,
       break;
     }
   }
-  std::cout << RED << "Socket down." << RESET << std::endl;
+  std::cout << RED << "Socket down" << RESET << std::endl;
+  delete &client_socket;
 }
 
 // TODO Deprecated?
@@ -246,12 +247,15 @@ int main() {
   printf("Listening on port %u\n", PORT);
   while (true) {
     try {
-      asio::ip::tcp::socket socket{io_context};
+      // TODO change to smart pointer
+      asio::ip::tcp::socket *socket = new asio::ip::tcp::socket{io_context};
       asio::ip::tcp::endpoint client_endpoint;
-      acceptor.accept(socket, client_endpoint);
+      acceptor.accept(*socket, client_endpoint);
       std::cout << MAG << "New socket on port " << client_endpoint.port()
                 << RESET << std::endl;
-      new_handle(socket, io_context);
+      std::thread thread{new_handle, std::ref(*socket), std::ref(io_context)};
+      thread.detach();
+      // new_handle(*socket, io_context);
     } catch (std::exception &e) {
       std::cerr << e.what() << std::endl;
     }
