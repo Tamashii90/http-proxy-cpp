@@ -1,3 +1,4 @@
+// TODO use async boost::asio on different branch?
 #include <algorithm>
 #include <boost/asio.hpp>
 #include <iostream>
@@ -164,15 +165,16 @@ void new_handle(const std::shared_ptr<asio::ip::tcp::socket> &client_socket_p,
   asio::ip::tcp::socket &client_socket = *client_socket_p;
   asio::ip::tcp::socket server_socket{io_context};
   std::string message;
+  std::string prev_host;
   while (client_socket.is_open()) {
-    std::string host;
-    if (!recv_message(client_socket, message, &host)) {
+    std::string curr_host;
+    if (!recv_message(client_socket, message, &curr_host)) {
       break;
     }
-    // only connect if not already connected
-    if (!server_socket.is_open() &&
-        !connect_to_endpoint(io_context, server_socket, host)) {
-      break;
+    if (!server_socket.is_open() || prev_host != curr_host) {
+      if (!connect_to_endpoint(io_context, server_socket, curr_host)) {
+        break;
+      }
     }
     asio::write(server_socket, asio::buffer(message));
     message.clear();
@@ -184,8 +186,10 @@ void new_handle(const std::shared_ptr<asio::ip::tcp::socket> &client_socket_p,
     if (!server_socket.is_open()) {
       break;
     }
+    prev_host = curr_host;
   }
   std::cout << RED << "Socket down" << RESET << std::endl;
+  // TODO correct sockets breakdown?
   // client_socket.close();
 }
 
@@ -247,8 +251,7 @@ int main() {
       acceptor.accept(*socket, client_endpoint);
       std::cout << MAG << "New socket on port " << client_endpoint.port()
                 << RESET << std::endl;
-      std::thread thread{new_handle, socket, std::ref(io_context)};
-      thread.detach();
+      std::thread{new_handle, socket, std::ref(io_context)}.detach();
       // asio::post(thread_pool,
       // [socket, &thread_pool] { new_handle(socket, thread_pool); });
     } catch (std::exception &e) {
