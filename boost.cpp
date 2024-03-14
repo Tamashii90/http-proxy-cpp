@@ -97,7 +97,6 @@ void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
   asio::write(client_socket, asio::buffer(response_header));
   std::cout << GREEN << response_header << RESET << std::endl;
 
-  // TODO handle chunked messages
   if (identify_body(response_header) != Body::CONTENT_LENGTH) {
     std::cout << RED << "Whoops! Only content-length is supported for now."
               << RESET << std::endl;
@@ -115,11 +114,11 @@ void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
 }
 *******************************************************************************/
 
-bool recv_message(asio::ip::tcp::socket &client_socket, std::string &message,
+bool recv_message(asio::ip::tcp::socket &socket, std::string &message,
                   std::string *host_to_mutate = nullptr) {
   system::error_code err;
-  auto header_len = asio::read_until(
-      client_socket, asio::dynamic_buffer(message), "\r\n\r\n", err);
+  auto header_len =
+      asio::read_until(socket, asio::dynamic_buffer(message), "\r\n\r\n", err);
   if (err) {
     if (err.value() == asio::error::eof && !header_len) {
       return false;
@@ -144,20 +143,14 @@ bool recv_message(asio::ip::tcp::socket &client_socket, std::string &message,
   std::cout << (host_to_mutate ? YELLOW : GREEN) << header << RESET
             << std::endl;
 
-  // TODO handle chunked messages
   Body body_type = identify_body(header);
-  if (body_type != Body::CONTENT_LENGTH) {
-    if (body_type == Body::NONE) {
-      return true;
-    }
-    std::cout << RED << "Whoops! Only content-length is supported for now."
-              << RESET << std::endl;
-    return false;
+  if (body_type == Body::CONTENT_LENGTH) {
+    auto content_length = stoul(parse_field(header, "content-length"));
+    asio::read(socket,
+               asio::dynamic_buffer(message, content_length + header_len), err);
+  } else if (body_type == Body::CHUNKED) {
+    asio::read_until(socket, asio::dynamic_buffer(message), "0\r\n\r\n", err);
   }
-  auto content_length = stoul(parse_field(header, "content-length"));
-  auto transferred = asio::read(
-      client_socket, asio::dynamic_buffer(message, content_length + header_len),
-      err);
   if (err && err.value() != asio::error::eof) {
     throw boost::system::system_error{err};
   }
@@ -166,8 +159,9 @@ bool recv_message(asio::ip::tcp::socket &client_socket, std::string &message,
 
 // TODO handle errors in writes and reads (e.g. most writes don't have
 // error_code in their arguments)
-void new_handle(asio::ip::tcp::socket &client_socket,
+void new_handle(const std::shared_ptr<asio::ip::tcp::socket> &client_socket_p,
                 asio::io_context &io_context) {
+  asio::ip::tcp::socket &client_socket = *client_socket_p;
   asio::ip::tcp::socket server_socket{io_context};
   std::string message;
   while (client_socket.is_open()) {
@@ -192,7 +186,7 @@ void new_handle(asio::ip::tcp::socket &client_socket,
     }
   }
   std::cout << RED << "Socket down" << RESET << std::endl;
-  delete &client_socket;
+  // client_socket.close();
 }
 
 // TODO Deprecated?
@@ -247,15 +241,16 @@ int main() {
   printf("Listening on port %u\n", PORT);
   while (true) {
     try {
-      // TODO change to smart pointer
-      asio::ip::tcp::socket *socket = new asio::ip::tcp::socket{io_context};
+      std::shared_ptr<asio::ip::tcp::socket> socket =
+          std::make_shared<asio::ip::tcp::socket>(io_context);
       asio::ip::tcp::endpoint client_endpoint;
       acceptor.accept(*socket, client_endpoint);
       std::cout << MAG << "New socket on port " << client_endpoint.port()
                 << RESET << std::endl;
-      std::thread thread{new_handle, std::ref(*socket), std::ref(io_context)};
+      std::thread thread{new_handle, socket, std::ref(io_context)};
       thread.detach();
-      // new_handle(*socket, io_context);
+      // asio::post(thread_pool,
+      // [socket, &thread_pool] { new_handle(socket, thread_pool); });
     } catch (std::exception &e) {
       std::cerr << e.what() << std::endl;
     }
