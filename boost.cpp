@@ -7,20 +7,12 @@
 #include <regex>
 #include <string>
 
+#include "Entity.h"
+#include "definitions.h"
+
 using namespace boost;
 
 constexpr unsigned PORT = 8000;
-
-constexpr const char *RED = "\x1B[31m";
-constexpr const char *GREEN = "\x1B[32m";
-constexpr const char *YELLOW = "\x1B[33m";
-constexpr const char *BLU = "\x1B[34m";
-constexpr const char *MAG = "\x1B[35m";
-constexpr const char *CYN = "\x1B[36m";
-constexpr const char *WHT = "\x1B[37m";
-constexpr const char *RESET = "\x1B[0m";
-
-enum class Body { CONTENT_LENGTH, CHUNKED, NONE };
 
 std::string parse_field(const std::string &http_header,
                         std::string &&field_name);
@@ -238,24 +230,39 @@ std::string parse_field(const std::string &http_header_, std::string &&field) {
   return result;
 }
 
+void start_accept(asio::io_context &io_context,
+                  asio::ip::tcp::acceptor &acceptor) {
+  std::shared_ptr<asio::ip::tcp::socket> socket =
+      std::make_shared<asio::ip::tcp::socket>(io_context);
+  asio::ip::tcp::endpoint *client_endpoint = new asio::ip::tcp::endpoint{};
+  acceptor.async_accept(*socket, *client_endpoint,
+                        [client_endpoint, &io_context, &acceptor,
+                         socket](const system::error_code &error) {
+                          std::cout << MAG << "New socket on port "
+                                    << client_endpoint->port() << RESET
+                                    << std::endl;
+                          new Entity{io_context, socket};
+                          start_accept(io_context, acceptor);
+                        });
+}
+
 int main() {
   asio::io_context io_context;
   asio::ip::tcp::acceptor acceptor{
       io_context, asio::ip::tcp::endpoint{asio::ip::tcp::v4(), PORT}};
   printf("Listening on port %u\n", PORT);
-  while (true) {
-    try {
-      std::shared_ptr<asio::ip::tcp::socket> socket =
-          std::make_shared<asio::ip::tcp::socket>(io_context);
-      asio::ip::tcp::endpoint client_endpoint;
-      acceptor.accept(*socket, client_endpoint);
-      std::cout << MAG << "New socket on port " << client_endpoint.port()
-                << RESET << std::endl;
-      std::thread{new_handle, socket, std::ref(io_context)}.detach();
-      // asio::post(thread_pool,
-      // [socket, &thread_pool] { new_handle(socket, thread_pool); });
-    } catch (std::exception &e) {
-      std::cerr << e.what() << std::endl;
-    }
+  // while (true) {
+  try {
+    // std::shared_ptr<asio::ip::tcp::socket> socket =
+    // std::make_shared<asio::ip::tcp::socket>(io_context);
+    // asio::ip::tcp::endpoint client_endpoint;
+    // acceptor.accept(*socket, client_endpoint);
+    // std::cout << MAG << "New socket on port " << client_endpoint.port()
+    // << RESET << std::endl;
+    // std::thread{new_handle, socket, std::ref(io_context)}.detach();
+    start_accept(io_context, acceptor);
+    io_context.run();
+  } catch (std::exception &e) {
+    std::cerr << e.what() << std::endl;
   }
 }

@@ -2,19 +2,25 @@ CC = g++
 CFLAGS = -Wall -Wextra
 LDFLAGS = -pthread
 INCLUDE = ./include
-SOURCE = boost.cpp
+SOURCE = boost.cpp Entity.cpp
+OBJS = $(SOURCE:.cpp=.o)
+TARGET = boost
+TARGET_DEBUG = boost_debug
 
-boost: $(SOURCE)
-	$(CC) $(SOURCE) -I $(INCLUDE) $(LDFLAGS) -o $@
+$(TARGET): $(OBJS)
+	$(CC) $^ $(LDFLAGS) -o $@
 
-boost_debug: $(SOURCE)
-	$(CC) $(SOURCE) -I $(INCLUDE) $(LDFLAGS) -g -o $@
+%.o: %.cpp
+	$(CC) -I $(INCLUDE) -c $< -o $@
 
-run: boost
-	./boost
+$(TARGET_DEBUG): $(OBJS)
+	$(CC) $^ $(LDFLAGS) -g -o $@
 
-debug: boost_debug
-	gdb ./boost_debug
+run: $(TARGET)
+	./$<
+
+debug: $(TARGET_DEBUG)
+	gdb ./$<
 
 clean:
-	rm boost
+	rm -f $(TARGET) $(TARGET_DEBUG) $(OBJS)
