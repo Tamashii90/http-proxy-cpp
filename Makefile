@@ -13,8 +13,8 @@ $(TARGET): $(OBJS)
 %.o: %.cpp
 	$(CC) -I $(INCLUDE) -c $< -o $@
 
-$(TARGET_DEBUG): $(OBJS)
-	$(CC) $^ $(LDFLAGS) -g -o $@
+$(TARGET_DEBUG): $(SOURCE)
+	$(CC) $^ -I $(INCLUDE) $(LDFLAGS) -g -o $@
 
 run: $(TARGET)
 	./$<
