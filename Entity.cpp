@@ -1,3 +1,5 @@
+// TODO How to handle socket shutdown? Normally and on error?
+// TODO Make this multithreaded
 #include <boost/asio.hpp>
 #include <iostream>
 
@@ -41,21 +43,27 @@ Entity::Entity(asio::io_context &io_context,
 // }
 
 void Entity::get_message_from_client() {
-  asio::deadline_timer timer(io_context);
-  timer.expires_from_now(posix_time::seconds(5));
-
-  timer.async_wait([this](const system::error_code &ec) {
-    if (!ec) {
-      std::cout << "Timeout reached, cancelling async_read" << std::endl;
-      client_socket->cancel();
+  std::shared_ptr<asio::steady_timer> timer =
+      std::make_shared<asio::steady_timer>(io_context);
+  timer->expires_after(std::chrono::seconds(10));
+  timer->async_wait([this](const system::error_code &ec) {
+    if (ec) {
+      std::cerr << ec.what() << std::endl;
+      return;
     }
+    std::cout << "Timeout reached, cancelling async_read" << std::endl;
+    client_socket->cancel();
   });
 
   asio::async_read_until(
       *client_socket, asio::dynamic_buffer(message), "\r\n\r\n",
-      [this, &timer](system::error_code err, std::size_t header_len) {
-        timer.cancel();
+      [this, timer](system::error_code err, std::size_t header_len) {
+        timer->cancel();
         if (err) {
+          if (err.value() == asio::error::operation_aborted) {
+            close();
+            return;
+          }
           if (err.value() == asio::error::eof && !header_len) {
             return;
           }
@@ -122,4 +130,10 @@ void Entity::get_message_from_server() {
 
 void Entity::send_message_to_client() {
   asio::write(*client_socket, asio::buffer(message));
+}
+
+void Entity::close() {
+  client_socket->close();
+  server_socket.close();
+  delete this;
 }

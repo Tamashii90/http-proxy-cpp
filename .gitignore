@@ -1,5 +1,6 @@
 /boost
 /boost_debug
+include/boost
 *.o
 compile_commands.json
 .cache/

@@ -13,6 +13,8 @@ struct Entity {
 
   void send_message_to_client();
 
+  void close();
+
 private:
   boost::asio::io_context &io_context;
   std::shared_ptr<boost::asio::ip::tcp::socket> client_socket;
