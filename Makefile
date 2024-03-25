@@ -2,7 +2,7 @@ CC = g++
 CFLAGS = -Wall -Wextra
 LDFLAGS = -pthread
 INCLUDE = ./include
-SOURCE = boost.cpp Entity.cpp
+SOURCE = boost.cpp Socket.cpp
 OBJS = $(SOURCE:.cpp=.o)
 TARGET = boost
 TARGET_DEBUG = boost_debug

@@ -1,21 +1,17 @@
-// TODO use async boost::asio on different branch?
 #include <algorithm>
 #include <boost/asio.hpp>
 #include <iostream>
-#include <istream>
-#include <ostream>
-#include <regex>
 #include <string>
+#include <unordered_set>
 
-#include "Entity.h"
+#include "Socket.h"
 #include "definitions.h"
 
 using namespace boost;
 
 constexpr unsigned PORT = 8000;
 
-std::string parse_field(const std::string &http_header,
-                        std::string &&field_name);
+std::unordered_set<std::shared_ptr<Socket>> conn_pool;
 
 void to_lowercase(std::string &str) {
   std::transform(str.begin(), str.end(), str.begin(),
@@ -60,53 +56,6 @@ Body identify_body(const std::string &http_header) {
   return Body::NONE;
 }
 
-// TODO Deprecated?
-/*******************************************************************************
-void send_request(asio::ip::tcp::socket &client_socket, const std::string &host,
-                  asio::io_context &io_context, const std::string &request) {
-  asio::ip::tcp::resolver resolver{io_context};
-  system::error_code err;
-  const auto endpoints = resolver.resolve(host, "http", err);
-  if (err) {
-    std::cout << RED << err.message() << ". "
-              << "Host: [" << host << "]" << RESET << std::endl;
-    return;
-  }
-  asio::ip::tcp::socket socket{io_context};
-  asio::connect(socket, endpoints);
-
-  asio::write(socket, asio::buffer(request));
-
-  std::string response_header_plus;
-  // CAUTION read_until might read past the delimiter, but returns real length
-  auto header_len = asio::read_until(
-      socket, asio::dynamic_buffer(response_header_plus), "\r\n\r\n", err);
-  if (err && err.value() != asio::error::eof) {
-    throw boost::system::system_error{err};
-  }
-  // After reading, header_len <= response_header.size() because of potential
-  // extra characters
-  const std::string response_header{response_header_plus.substr(0, header_len)};
-  asio::write(client_socket, asio::buffer(response_header));
-  std::cout << GREEN << response_header << RESET << std::endl;
-
-  if (identify_body(response_header) != Body::CONTENT_LENGTH) {
-    std::cout << RED << "Whoops! Only content-length is supported for now."
-              << RESET << std::endl;
-    return;
-  }
-  auto content_length = stoul(parse_field(response_header, "content-length"));
-  std::string response_body{response_header_plus.substr(
-      header_len, response_header_plus.size() - header_len)};
-  auto transferred = asio::read(
-      socket, asio::dynamic_buffer(response_body, content_length), err);
-  if (err && err.value() != asio::error::eof) {
-    throw boost::system::system_error{err};
-  }
-  asio::write(client_socket, asio::buffer(response_body));
-}
-*******************************************************************************/
-
 bool recv_message(asio::ip::tcp::socket &socket, std::string &message,
                   std::string *host_to_mutate = nullptr) {
   system::error_code err;
@@ -116,6 +65,7 @@ bool recv_message(asio::ip::tcp::socket &socket, std::string &message,
     if (err.value() == asio::error::eof && !header_len) {
       return false;
     }
+    puts("THIEF");
     throw boost::system::system_error{err};
   }
   if (host_to_mutate) {
@@ -150,8 +100,7 @@ bool recv_message(asio::ip::tcp::socket &socket, std::string &message,
   return true;
 }
 
-// TODO handle errors in writes and reads (e.g. most writes don't have
-// error_code in their arguments)
+// TODO Delete later
 void new_handle(const std::shared_ptr<asio::ip::tcp::socket> &client_socket_p,
                 asio::io_context &io_context) {
   asio::ip::tcp::socket &client_socket = *client_socket_p;
@@ -181,34 +130,7 @@ void new_handle(const std::shared_ptr<asio::ip::tcp::socket> &client_socket_p,
     prev_host = curr_host;
   }
   std::cout << RED << "Socket down" << RESET << std::endl;
-  // TODO correct sockets breakdown?
-  // client_socket.close();
 }
-
-// TODO Deprecated?
-/*************************************************************************
-void handle(asio::ip::tcp::socket &socket, asio::io_context &io_context) {
-  std::string request_header;
-  system::error_code err;
-  asio::read_until(socket, asio::dynamic_buffer(request_header), "\r\n\r\n");
-  if (err && err.value() != asio::error::eof) {
-    throw boost::system::system_error{err};
-  }
-  std::cout << YELLOW << request_header << RESET << std::endl;
-  std::string first_line =
-      request_header.substr(0, request_header.find("\r\n"));
-  std::istringstream iss{first_line};
-  std::string method, url, http_version;
-  iss >> method >> url >> http_version;
-  // http_version looks like "HTTP/1.1"
-  if (stod(http_version.substr(http_version.find("/") + 1)) > 1.1) {
-    std::cerr << RED << "HTTP Version Not Supported" << RESET << std::endl;
-    return;
-  }
-  const std::string host = parse_field(request_header, "host");
-  send_request(socket, host, io_context, request_header);
-}
-*************************************************************************/
 
 std::string parse_field(const std::string &http_header_, std::string &&field) {
   std::string http_header{http_header_};
@@ -232,36 +154,43 @@ std::string parse_field(const std::string &http_header_, std::string &&field) {
 
 void start_accept(asio::io_context &io_context,
                   asio::ip::tcp::acceptor &acceptor) {
-  std::shared_ptr<asio::ip::tcp::socket> socket =
-      std::make_shared<asio::ip::tcp::socket>(io_context);
-  asio::ip::tcp::endpoint *client_endpoint = new asio::ip::tcp::endpoint{};
-  acceptor.async_accept(*socket, *client_endpoint,
-                        [client_endpoint, &io_context, &acceptor,
-                         socket](const system::error_code &error) {
-                          std::cout << MAG << "New socket on port "
-                                    << client_endpoint->port() << RESET
-                                    << std::endl;
-                          new Entity{io_context, socket};
-                          start_accept(io_context, acceptor);
-                        });
+  acceptor.async_accept(
+      asio::make_strand(io_context),
+      [&io_context, &acceptor](const system::error_code &ec,
+                               asio::ip::tcp::socket socket) {
+        if (ec) {
+          puts("Error accepting..");
+          throw system::system_error{ec};
+        }
+        std::cout << MAG << "New socket on port "
+                  << socket.remote_endpoint().port() << RESET << std::endl;
+        // auto new_entity =
+        // std::make_shared<Entity>(io_context, std::move(socket), conn_pool);
+        // new_entity->start();
+        // conn_pool.insert(std::move(new_entity));
+        (new Socket(io_context, std::move(socket), conn_pool))->start();
+        start_accept(io_context, acceptor);
+      });
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+  // std::size_t threads_num = 1;
+  std::size_t threads_num = std::thread::hardware_concurrency();
   asio::io_context io_context;
   asio::ip::tcp::acceptor acceptor{
       io_context, asio::ip::tcp::endpoint{asio::ip::tcp::v4(), PORT}};
-  printf("Listening on port %u\n", PORT);
-  // while (true) {
   try {
-    // std::shared_ptr<asio::ip::tcp::socket> socket =
-    // std::make_shared<asio::ip::tcp::socket>(io_context);
-    // asio::ip::tcp::endpoint client_endpoint;
-    // acceptor.accept(*socket, client_endpoint);
-    // std::cout << MAG << "New socket on port " << client_endpoint.port()
-    // << RESET << std::endl;
-    // std::thread{new_handle, socket, std::ref(io_context)}.detach();
     start_accept(io_context, acceptor);
-    io_context.run();
+    std::vector<std::thread> threads;
+    for (std::size_t i = 0; i < threads_num; ++i) {
+      threads.emplace_back([&io_context] { io_context.run(); });
+    }
+
+    printf("Listening on port %u\n", PORT);
+
+    for (std::size_t i = 0; i < threads.size(); ++i) {
+      threads[i].join();
+    }
   } catch (std::exception &e) {
     std::cerr << e.what() << std::endl;
   }
