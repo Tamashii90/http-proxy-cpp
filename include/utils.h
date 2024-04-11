@@ -14,5 +14,7 @@ constexpr const char *RESET = "\x1B[0m";
 
 enum class Body { CONTENT_LENGTH, CHUNKED, NONE };
 
+void to_lowercase(std::string &str);
+bool find_ci(const std::string &haystack, const std::string &needle);
 std::string parse_field(std::string header_copy, std::string &&field_name);
 Body identify_body(const std::string &http_header);

@@ -1,12 +1,11 @@
 #include <boost/asio.hpp>
 #include <chrono>
 #include <iostream>
-#include <unordered_set>
 
 using namespace boost;
 
 #include "Socket.h"
-#include "definitions.h"
+#include "utils.h"
 
 Socket::Socket(asio::io_context &io_context, asio::ip::tcp::socket &&socket)
     : strand{asio::make_strand(io_context)}, resolver{strand},
@@ -28,8 +27,8 @@ void Socket::handle_wait(const system::error_code &ec,
   }
   if (!ec) {
     try {
-      std::cout << "Socket timed out on port "
-                << client_socket.remote_endpoint().port() << std::endl;
+      std::cout << BLU << "Socket timed out on port "
+                << client_socket.remote_endpoint().port() << RESET << std::endl;
       close();
     } catch (const system::system_error &e) {
       std::cerr << e.what() << "\n"
@@ -102,7 +101,6 @@ void Socket::read_body(asio::ip::tcp::socket &socket,
   // causing read_until to unluckily read 0 bits
   std::shared_ptr<std::string> http_body{std::make_shared<std::string>("")};
   if (stopped) {
-    puts("body STOPPUH");
     return;
   }
   Body body_type = identify_body(http_header);
@@ -116,9 +114,9 @@ void Socket::read_body(asio::ip::tcp::socket &socket,
     if (!ec) {
       callback();
     } else if (ec.value() == asio::error::eof) {
-      puts("body EOF");
+      // puts("body EOF");
     } else if (ec.value() == asio::error::operation_aborted) {
-      puts("body ABORRR");
+      // puts("body ABORRR");
     } else {
       throw system::system_error{ec};
     }
@@ -214,7 +212,6 @@ void Socket::get_message_from_server(size_t msg_id) {
       [self, this, msg_id, &reply](system::error_code ec,
                                    std::size_t header_len) {
         if (stopped) {
-          puts("Get server: STOPPUH");
           return;
         }
         if (ec) {
@@ -235,7 +232,8 @@ void Socket::get_message_from_server(size_t msg_id) {
           throw system::system_error{ec};
         }
         const std::string header{reply.substr(0, header_len)};
-        std::cout << GREEN << header << RESET << std::endl;
+        std::cout << GREEN << client_socket.remote_endpoint().port() << "\n"
+                  << header << RESET << std::endl;
         read_body(server_socket, reply, header,
                   [self, this, msg_id] { send_message_to_client(msg_id); });
       });
@@ -261,8 +259,6 @@ void Socket::send_message_to_client(size_t msg_id) {
 
 // TODO Do I need mutexes?
 void Socket::close() {
-  // auto self(shared_from_this());
-  // printf("POINTERS: %ld\n", self.use_count());
   mutex.lock();
   if (stopped) {
     puts("NZEEE");
