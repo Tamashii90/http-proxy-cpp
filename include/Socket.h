@@ -8,9 +8,8 @@ struct Socket : public std::enable_shared_from_this<Socket> {
 
   void resolve_server(size_t msg_id);
 
-  void
-  connect_to_endpoints(size_t msg_id,
-                       boost::asio::ip::tcp::resolver::results_type &endpoints);
+  void connect_to_endpoints(
+      size_t msg_id, boost::asio::ip::tcp::resolver::results_type &endpoints);
 
   void handle_wait(const boost::system::error_code &ec,
                    std::shared_ptr<Socket> self);
@@ -29,7 +28,7 @@ struct Socket : public std::enable_shared_from_this<Socket> {
 
   void close();
 
-private:
+ private:
   boost::asio::strand<boost::asio::io_context::executor_type> strand;
   boost::asio::ip::tcp::resolver resolver;
   boost::asio::ip::tcp::socket client_socket;

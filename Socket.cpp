@@ -8,10 +8,13 @@ using namespace boost;
 #include "utils.h"
 
 Socket::Socket(asio::io_context &io_context, asio::ip::tcp::socket &&socket)
-    : strand{asio::make_strand(io_context)}, resolver{strand},
-      client_socket{std::move(socket)}, server_socket{strand},
-      timeout{std::chrono::seconds(15)}, timer{strand, timeout}, stopped{
-                                                                     false} {}
+    : strand{asio::make_strand(io_context)},
+      resolver{strand},
+      client_socket{std::move(socket)},
+      server_socket{strand},
+      timeout{std::chrono::seconds(15)},
+      timer{strand, timeout},
+      stopped{false} {}
 
 void Socket::start() {
   auto self(shared_from_this());
